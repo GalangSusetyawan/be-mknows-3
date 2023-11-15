@@ -19,11 +19,11 @@ export class ArticleService {
       description: article.description,
       content: article.content,
 
-      thumbnail: article.thumbnail?.uuid, 
+      thumbnail: article.thumbnail?.uuid,
       author: {
         uuid: article.author.uuid,
         full_name: article.author.full_name || null,
-        avatar: article.author.avatar?.uuid || null, 
+        avatar: article.author.avatar?.uuid || null,
       },
       categories: article.categories.map((articleCategory) => articleCategory.category),
       likes: article.likes || 0
@@ -36,7 +36,7 @@ export class ArticleService {
 
     const where = {};
 
-    if(search) {
+    if (search) {
       where[Op.or] = [];
 
       where[Op.or].push({
@@ -71,14 +71,14 @@ export class ArticleService {
     }
 
     const orderClause = [];
-    
+
     if (order && sort) {
       if (sort === "asc" || sort === "desc") {
         orderClause.push([order, sort]);
       }
     }
 
-    const { rows: articles, count } = await DB.Articles.findAndCountAll({ 
+    const { rows: articles, count } = await DB.Articles.findAndCountAll({
       where,
       limit: parseInt(limit),
       offset,
@@ -90,9 +90,9 @@ export class ArticleService {
         where: { article_id: article.pk }
       });
     });
-    
+
     const likeCounts = await Promise.all(likeCountPromises);
-    
+
     articles.forEach((article, index) => {
       article.likes = likeCounts[index];
     });
@@ -113,14 +113,14 @@ export class ArticleService {
       where: { uuid: article_id },
     })
 
-    if(!article) {
+    if (!article) {
       throw new HttpException(false, 404, "Article is not found");
     }
 
     const likesCount = await DB.ArticlesLikes.count({
       where: { article_id: article.pk }
     });
-        
+
     article.likes = likesCount;
 
     const response = this.articleParsed(article);
@@ -128,45 +128,93 @@ export class ArticleService {
   }
 
   public async getArticlesByCategory(query: ArticleQueryParams, category_id: string): Promise<{ articles: ArticleParsed[], pagination: Pagination }> {
-    const category = await DB.Categories.findOne({ attributes: ["pk"], where:{ uuid: category_id } });
+    const category = await DB.Categories.findOne({ attributes: ["pk"], where: { uuid: category_id } });
     if (!category) {
       throw new HttpException(false, 400, "Category is not found");
     }
 
     const articlesCategory = await DB.ArticlesCategories.findAll({ attributes: ["article_id"], where: { category_id: category.pk } });
-    if(!articlesCategory) {
+    if (!articlesCategory) {
       throw new HttpException(false, 400, "Article with that category is not found");
     }
 
     const articleIds = articlesCategory.map(articleCategory => articleCategory.article_id);
+    // Pagination Start
+    const { page = "1", limit = "10", search, order, sort } = query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    const { rows: articles } = await DB.Articles.findAndCountAll({ 
-      attributes: { exclude: ["pk"] },
-      where: { 
-        pk: { [Op.in]: articleIds }
-      }
+    const where = {};
+
+    if (search) {
+      where[Op.or] = [];
+
+      where[Op.or].push({
+        [Op.or]: [
+          {
+            title: {
+              [Op.iLike]: `%${search}%`,
+            },
+          },
+          {
+            description: {
+              [Op.iLike]: `%${search}%`,
+            },
+          },
+          {
+            content: {
+              [Op.iLike]: `%${search}%`,
+            },
+          },
+        ],
+      });
+
+      where[Op.or].push({
+        [Op.or]: [
+          {
+            "$author.full_name$": {
+              [Op.iLike]: `%${search}%`,
+            },
+          }
+        ],
+      });
+    }
+
+    const orderClause = [];
+    // Pagination End
+    const { rows: articles, count } = await DB.Articles.findAndCountAll({
+      where,
+      limit: parseInt(limit),
+      offset,
+      order: orderClause
     });
-    
+
     const likeCountPromises = articles.map(article => {
       return DB.ArticlesLikes.count({
         where: { article_id: article.pk }
       });
     });
-    
+
     const likeCounts = await Promise.all(likeCountPromises);
-    
+
     articles.forEach((article, index) => {
       article.likes = likeCounts[index];
     });
 
+    const pagination: Pagination = {
+      current_page: parseInt(page),
+      size_page: articles.length,
+      max_page: Math.ceil(count / parseInt(limit)),
+      total_data: count,
+    };
+
     const transformedArticles = articles.map(article => this.articleParsed(article));
-    return { articles: transformedArticles, pagination: null };
+    return { articles: transformedArticles, pagination };
   }
 
   public async createArticle(author_id: number, data: CreateArticleDto): Promise<ArticleParsed> {
-    const thumbnail = await DB.Files.findOne({ attributes: ["pk"], where: { uuid: data.thumbnail }});
-    if(!thumbnail) throw new HttpException(false, 404, "File is not found");
-    
+    const thumbnail = await DB.Files.findOne({ attributes: ["pk"], where: { uuid: data.thumbnail } });
+    if (!thumbnail) throw new HttpException(false, 404, "File is not found");
+
     const categories = await DB.Categories.findAll({
       attributes: ["pk"],
       where: {
@@ -187,7 +235,7 @@ export class ArticleService {
         content: data.content,
         thumbnail_id: thumbnail.pk,
         author_id
-      }, { transaction});
+      }, { transaction });
 
       const categoryIds = categories.map(category => category.pk);
 
@@ -202,36 +250,36 @@ export class ArticleService {
       return this.getArticleById(article.uuid);
     } catch (error) {
       await transaction.rollback();
-      throw error; 
+      throw error;
     }
   }
-  
-  public async updateArticle(article_id: string, author_id: number, data: UpdateArticleDto): Promise<ArticleParsed> {
-    const article = await DB.Articles.findOne({ where: { uuid: article_id }});
 
-    if(!article) {
+  public async updateArticle(article_id: string, author_id: number, data: UpdateArticleDto): Promise<ArticleParsed> {
+    const article = await DB.Articles.findOne({ where: { uuid: article_id } });
+
+    if (!article) {
       throw new HttpException(false, 400, "Article is not found");
     }
-    
+
     const updatedData: any = {};
-    
+
     if (data.title) updatedData.title = data.title;
     if (data.description) updatedData.description = data.description;
     if (data.content) updatedData.content = data.content;
-    
+
     if (data.thumbnail) {
-      const file = await DB.Files.findOne({ 
-        attributes: ["pk"], 
-        where: { 
-          uuid: data.thumbnail, 
-          user_id: author_id 
-        } 
+      const file = await DB.Files.findOne({
+        attributes: ["pk"],
+        where: {
+          uuid: data.thumbnail,
+          user_id: author_id
+        }
       });
-      
+
       if (!file) {
         throw new HttpException(false, 400, "File is not found");
       }
-  
+
       updatedData.thumbnail = file.pk;
     }
 
@@ -284,12 +332,12 @@ export class ArticleService {
       return this.getArticleById(article.uuid);
     } catch (error) {
       await transaction.rollback();
-      throw error; 
+      throw error;
     }
   }
 
   public async deleteArticle(article_id: string, author_id: number): Promise<boolean> {
-    const article = await DB.Articles.findOne({ where: { uuid: article_id, author_id }});
+    const article = await DB.Articles.findOne({ where: { uuid: article_id, author_id } });
 
     if (!article) {
       throw new HttpException(false, 400, "Article is not found");
@@ -299,22 +347,22 @@ export class ArticleService {
     try {
       await article.destroy({ transaction });
 
-      await DB.ArticlesCategories.destroy({ 
-        where: { article_id: article.pk }, 
+      await DB.ArticlesCategories.destroy({
+        where: { article_id: article.pk },
         transaction,
       });
 
-      await DB.ArticlesLikes.destroy({ 
-        where: { article_id: article.pk }, 
+      await DB.ArticlesLikes.destroy({
+        where: { article_id: article.pk },
         transaction,
       });
-      
+
       await transaction.commit();
 
       return true;
     } catch (error) {
       await transaction.rollback();
-      throw error; 
+      throw error;
     }
   }
 
@@ -330,20 +378,20 @@ export class ArticleService {
         DB.ArticlesLikes.findOne({ where: { article_id: article.pk, user_id }, transaction }),
         DB.ArticlesLikes.count({ where: { article_id: article.pk, user_id }, transaction })
       ]);
-  
+
       if (!articleLike) {
         await DB.ArticlesLikes.create({ article_id: article.pk, user_id }, { transaction });
         await transaction.commit();
-        return { article_id, is_liked: true, likes: articleLikesCount + 1 }; 
+        return { article_id, is_liked: true, likes: articleLikesCount + 1 };
       } else {
         await DB.ArticlesLikes.destroy({ where: { article_id: article.pk, user_id }, force: true, transaction });
         await transaction.commit();
-        return { article_id, is_liked: false, likes: articleLikesCount - 1 }; 
+        return { article_id, is_liked: false, likes: articleLikesCount - 1 };
       }
     } catch (error) {
       await transaction.rollback();
       throw error;
     }
   }
-  
+
 }
